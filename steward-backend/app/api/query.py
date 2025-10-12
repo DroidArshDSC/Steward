@@ -1,31 +1,24 @@
 from fastapi import APIRouter
+from app.core.rag_engine import answer_query
 
 router = APIRouter()
 
 @router.post("/")
 async def query_steward(payload: dict):
-    question = payload.get("question", "No question provided.")
-    
-    # Mocked sample responses for testing
-    mock_answers = {
-        "how to setup project": "To set up the project, clone the repo and run `uvicorn main:app --reload`.",
-        "who are you": "I’m Steward — your AI onboarding copilot.",
-        "what is this project": "This is an AI onboarding assistant that answers engineering questions."
-    }
+    question = payload.get("question", "").strip()
+    if not question:
+        return {"error": "Missing 'question' in request."}
 
-    # Find a response if available
-    answer = None
-    for key, val in mock_answers.items():
-        if key in question.lower():
-            answer = val
-            break
-
-    # Default fallback
-    if not answer:
-        answer = "I'm running in mock mode right now. Once OpenAI access is back, I’ll give real, contextual answers."
-
-    return {
-        "question": question,
-        "answer": answer,
-        "mode": "mock"
-    }
+    try:
+        result = answer_query(question)
+        return {
+            "question": question,
+            "answer": result["answer"],
+            "sources": result["sources"],
+            "mode": "live"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"❌ Query failed: {str(e)}"
+        }
