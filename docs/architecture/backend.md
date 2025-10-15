@@ -11,16 +11,17 @@ It provides APIs to query internal knowledge, retrieve relevant context from doc
 - **Pydantic + dotenv** — configuration and environment management  
 
 ## Module Map
+
 steward-backend/
-├── main.py # App entry point
+├── main.py               # App entry point
 ├── app/
-│ ├── api/
-│ │ ├── health.py # Health check endpoint
-│ │ └── query.py # RAG query API
-│ └── core/
-│ ├── ingest.py # Embedding + ingestion pipeline
-│ └── rag_engine.py # Context retrieval + LLM call
-└── data/chroma/ # Local vector store
+│   ├── api/
+│   │   ├── health.py     # Health check endpoint
+│   │   └── query.py      # RAG query API
+│   └── core/
+│       ├── ingest.py     # Embedding + ingestion pipeline
+│       └── rag_engine.py # Context retrieval + LLM call
+└── data/chroma/          # Local vector store
 
 ## Data Flow
 1. **Ingestion** — Markdown and code docs → Embeddings → Chroma vector DB  
