@@ -17,7 +17,9 @@ pip install -r requirements.txt
 ---
 
 ## Run
+```bash
 uvicorn main:app --reload
+```
 
 ### 🧠 **`docs/how-to/ingest-data.md`**
 
