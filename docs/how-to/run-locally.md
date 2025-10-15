@@ -20,7 +20,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 
 ### 🧠 **`docs/how-to/ingest-data.md`**
-```markdown
+
 # Ingest New Data into Steward
 
 ## Purpose
