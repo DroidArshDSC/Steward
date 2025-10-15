@@ -30,7 +30,7 @@ Add new documentation or knowledge files to the vector store.
 1. Place your Markdown files under `/data/docs` (create if missing).
 2. Run the ingestion script:
    ```bash
-        python app/core/ingest.py
+    python app/core/ingest.py
    ```
 3. The script will:
 - Embed text via OpenAI
