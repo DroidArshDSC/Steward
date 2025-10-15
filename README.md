@@ -31,15 +31,6 @@ It helps new and existing developers ramp up faster by answering questions, guid
 
 ---
 
-## 📂 Repo Structure
-/docs
-    /onboarding
-    /architecture
-    /how-to
-    /runbooks
-PRODUCT_BRIEF.md
-README.md
-
 
 ---
 
