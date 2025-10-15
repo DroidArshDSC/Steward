@@ -2,6 +2,7 @@ import os
 import ast
 import time
 from dotenv import load_dotenv
+from pathlib import Path
 from tqdm import tqdm
 from langchain_community.document_loaders import DirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -15,12 +16,22 @@ CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "data/chroma")
 
 # === Markdown Ingestion ===
 def load_markdown_docs():
-    if not os.path.exists("data/docs"):
-        print("⚠️ No docs folder found — skipping Markdown ingestion.")
+    """
+    Loads Markdown documentation from the top-level /docs folder.
+    Works regardless of where the script is executed.
+    """
+    # Three levels up: core → app → steward-backend → project root
+    project_root = Path(__file__).resolve().parents[3]
+    docs_path = project_root / "docs"
+
+    if not docs_path.exists():
+        print(f"⚠️ No docs folder found at {docs_path} — skipping Markdown ingestion.")
         return []
 
-    loader = DirectoryLoader("data/docs", glob="**/*.md")
+    print(f"📚 Loading Markdown docs from: {docs_path}")
+    loader = DirectoryLoader(str(docs_path), glob="**/*.md")
     docs = loader.load()
+
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     return splitter.split_documents(docs)
 
