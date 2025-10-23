@@ -208,3 +208,6 @@ __marimo__/
 
 #Knowledge Base
 steward-backend/data/chroma/
+
+#Knowledge Base Logs
+steward-backend/data/trace_logs/

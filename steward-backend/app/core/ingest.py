@@ -1,131 +1,75 @@
 import os
-import ast
+import glob
 import time
 from dotenv import load_dotenv
-from pathlib import Path
-from tqdm import tqdm
-from langchain_community.document_loaders import DirectoryLoader
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
+from langchain.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores import Chroma
-from langchain.docstore.document import Document
 
 load_dotenv()
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "data/chroma")
 
+def ingest_sources():
+    """Lightweight ingestion: picks up markdowns + code, prints files only."""
+    start_time = time.time()
+    paths = (
+        glob.glob("../*.md") +
+        glob.glob("docs/**/*.md", recursive=True) +
+        glob.glob("app/**/*.py", recursive=True)
+    )
 
-# === Markdown Ingestion ===
-def load_markdown_docs():
-    """
-    Loads Markdown documentation from the top-level /docs folder.
-    Works regardless of where the script is executed.
-    """
-    # Three levels up: core → app → steward-backend → project root
-    project_root = Path(__file__).resolve().parents[3]
-    docs_path = project_root / "docs"
-
-    if not docs_path.exists():
-        print(f"⚠️ No docs folder found at {docs_path} — skipping Markdown ingestion.")
-        return []
-
-    print(f"📚 Loading Markdown docs from: {docs_path}")
-    loader = DirectoryLoader(str(docs_path), glob="**/*.md")
-    docs = loader.load()
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    return splitter.split_documents(docs)
-
-
-# === Code Ingestion ===
-def extract_code_docs(directory="."):
-    """
-    Scans the given directory for Python source files, extracts docstrings
-    or representative code snippets, and returns them as LangChain Documents.
-    Automatically skips irrelevant or external directories.
-    """
-
-    EXCLUDE_DIRS = {
-        ".venv", "venv", "__pycache__", "node_modules",
-        "site-packages", "dist", "build", ".git"
-    }
-
-    code_docs = []
-
-    for root, dirs, files in os.walk(directory):
-        # Prevent recursion into excluded folders
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
-
-        for f in files:
-            if f.endswith(".py"):
-                path = os.path.join(root, f)
-                try:
-                    with open(path, "r", encoding="utf-8") as file:
-                        code = file.read()
-
-                    # Skip overly large files
-                    if len(code) > 20000:
-                        print(f"⚠️ Skipping {path} (too large: {len(code)} chars)")
-                        continue
-
-                    try:
-                        tree = ast.parse(code)
-                    except SyntaxError:
-                        print(f"⚠️ Syntax error while parsing {path}, skipping.")
-                        continue
-
-                    found = False
-                    for node in ast.walk(tree):
-                        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and ast.get_docstring(node):
-                            content = f"{node.name}: {ast.get_docstring(node)}"
-                            code_docs.append(Document(page_content=content, metadata={"source": path}))
-                            found = True
-
-                    # If no docstrings found, fallback to a small code snippet
-                    if not found:
-                        snippet = "\n".join(code.splitlines()[:15])
-                        code_docs.append(Document(page_content=snippet, metadata={"source": path}))
-
-                except (UnicodeDecodeError, OSError) as e:
-                    print(f"⚠️ Skipped {path} (read error: {e})")
-                    continue
-
-    print(f"🧠 Extracted {len(code_docs)} code entries from {directory}")
-    return code_docs
-
-
-
-# === Build VectorDB ===
-def build_vector_db():
-    md_docs = load_markdown_docs()
-    code_docs = extract_code_docs()
-
-    if not code_docs and not md_docs:
-        print("⚠️ No code or docs found. Please add Python files or Markdown documents.")
+    if not paths:
+        print("⚠️  No files found for ingestion.")
         return
 
-    all_docs = md_docs + code_docs
-    print(f"📄 Loaded {len(md_docs)} Markdown docs and 🧠 {len(code_docs)} code entries.")
+    print("📂 Files picked for ingestion:\n")
 
-    embeddings = OpenAIEmbeddings()
-    vectordb = None
+    # Track critical docs
+    critical_docs = {"README.md": False, "PRODUCT_BRIEF.md": False}
+    added = 0
 
-    batch_size = 500
-    for i in tqdm(range(0, len(all_docs), batch_size), desc="Embedding batches"):
-        batch = all_docs[i:i + batch_size]
+    embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
+    vectordb = Chroma(persist_directory=CHROMA_PERSIST_DIR, embedding_function=embeddings)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
+
+    for path in paths:
         try:
-            vectordb = Chroma.from_documents(
-                batch,
-                embeddings,
-                persist_directory=CHROMA_PERSIST_DIR
-            )
-            #vectordb.persist()
-            time.sleep(0.5)  # gentle rate limit
+            if not os.path.isfile(path):
+                continue
+            if any(path.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".pdf"]):
+                continue
+
+            print(f"   • {path}")
+            filename = os.path.basename(path)
+            if filename in critical_docs:
+                critical_docs[filename] = True
+
+            loader = TextLoader(path, encoding="utf-8")
+            docs = loader.load()
+            chunks = splitter.split_documents(docs)
+            vectordb.add_documents(chunks)
+            added += 1
+
         except Exception as e:
-            print(f"⚠️ Skipped batch {i // batch_size} due to error: {e}")
+            print(f"   └─ ❌ Failed to process {path}: {e}")
             continue
 
-    print("✅ Steward knowledge base built successfully!")
+    vectordb.persist()
+    duration = time.time() - start_time
+
+    print(f"\n✅ Ingestion complete. {added} files added in {duration:.2f}s.")
+    print(f"📍 Stored at: {CHROMA_PERSIST_DIR}\n")
+
+    # Highlight if important docs are missing
+    for doc, found in critical_docs.items():
+        if not found:
+            print(f"⚠️  Missing critical doc: {doc}")
+        else:
+            print(f"✔️  Included: {doc}")
 
 
 if __name__ == "__main__":
-    build_vector_db()
+    ingest_sources()
