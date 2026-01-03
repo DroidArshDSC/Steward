@@ -81,6 +81,29 @@ Feature request:
 {question}
 """.strip()
 
+DOCS_PROMPT = """
+You are generating {doc_type} documentation for a software project.
+
+RULES (MANDATORY):
+- Base ALL technical statements strictly on the provided code context
+- Use business context ONLY for framing and motivation
+- If something is unclear or missing, say so explicitly
+- Do NOT invent APIs, flows, or dependencies
+- Write for the specified audience
+
+Audience:
+{audience}
+
+Business Context (optional):
+{business_context}
+
+Code Context:
+{context}
+
+Output:
+Well-structured markdown documentation.
+""".strip()
+
 # ============================================================
 # Cache
 # ============================================================
@@ -248,6 +271,57 @@ class RAGEngine:
             "warning": "This code is a proposal and has NOT been applied to the codebase.",
         }
 
+    def generate_docs(self,session_id: str,doc_type: str,audience: str, business_context: str | None = None,k: int = 12,):
+        vectordb = self._get_vectordb(session_id)
+
+        # Broad retrieval for docs
+        docs = vectordb.similarity_search_with_score(
+            doc_type.replace("_", " "),
+            k=k,
+        )
+
+        if not docs:
+            return {
+                "doc_type": doc_type,
+                "audience": audience,
+                "content": "Not enough information in the codebase to generate documentation.",
+                "sources": [],
+                "warning": "Documentation generation failed due to insufficient context.",
+            }
+
+        normalized = [
+            {"text": d.page_content, "meta": d.metadata, "score": float(s)}
+            for d, s in docs
+        ]
+
+        context = "\n\n".join(
+            f"[{d['meta'].get('file_path', 'unknown')}]\n{d['text']}"
+            for d in normalized
+        )
+
+        content = self.llm.predict(
+            DOCS_PROMPT.format(
+                doc_type=doc_type,
+                audience=audience,
+                business_context=business_context or "None provided",
+                context=context,
+            )
+        ).strip()
+
+        sources = list({
+            d["meta"].get("file_path")
+            for d in normalized
+            if d["meta"].get("file_path")
+        })
+
+        return {
+            "doc_type": doc_type,
+            "audience": audience,
+            "content": content,
+            "sources": sources,
+            "warning": "Generated documentation is inferred from code and may be incomplete.",
+         }
+
 # ============================================================
 # Public API wrappers (NO shadowing)
 # ============================================================
@@ -260,3 +334,6 @@ def run_query(question: str, session_id: str):
 
 def run_suggest(question: str, session_id: str):
     return _engine.suggest(question=question, session_id=session_id)
+
+def run_generate_docs(session_id: str,doc_type: str,audience: str,business_context: str | None = None,):
+    return _engine.generate_docs(session_id=session_id,doc_type=doc_type,audience=audience,business_context=business_context,)
