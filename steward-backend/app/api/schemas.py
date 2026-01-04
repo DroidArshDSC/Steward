@@ -18,8 +18,8 @@ class DocsGenerateRequest(BaseModel):
 
 
 class DocsGenerateResponse(BaseModel):
-    doc_type: str
-    audience: str
+    doc_type: Literal["overview", "architecture", "api", "onboarding"]
+    audience: Literal["engineer", "pm", "stakeholder"]
     content: str
     sources: List[str]
     warning: str

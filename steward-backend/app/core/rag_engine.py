@@ -1,9 +1,10 @@
-print("RAG ENGINE FILE LOADED FROM:", __file__)
+#print("RAG ENGINE FILE LOADED FROM:", __file__)
 
 import os
 import time
 import json
 import logging
+import hashlib
 from threading import Lock
 from typing import Any, Dict, Tuple
 from datetime import datetime
@@ -56,8 +57,7 @@ Context:
 {context}
 
 Question:
-{question}
-""".strip()
+{question}""".strip()
 
 SUGGEST_PROMPT = """
 You are an AI onboarding assistant helping a developer extend a codebase.
@@ -78,8 +78,7 @@ Context:
 {context}
 
 Feature request:
-{question}
-""".strip()
+{question}""".strip()
 
 DOCS_PROMPT = """
 You are generating {doc_type} documentation for a software project.
@@ -90,6 +89,12 @@ RULES (MANDATORY):
 - If something is unclear or missing, say so explicitly
 - Do NOT invent APIs, flows, or dependencies
 - Write for the specified audience
+- For doc_type "onboarding", focus on:
+  * First 30 minutes
+  * Entry points
+  * Key files to read
+  * What not to change
+  * Known gaps or risks
 
 Audience:
 {audience}
@@ -101,8 +106,7 @@ Code Context:
 {context}
 
 Output:
-Well-structured markdown documentation.
-""".strip()
+Well-structured markdown documentation.""".strip()
 
 # ============================================================
 # Cache
@@ -185,7 +189,6 @@ class RAGEngine:
     # ------------------
     # Vector DB helpers
     # ------------------
-
     def _get_vectordb(self, session_id: str) -> Chroma:
         path = os.path.join(CHROMA_PERSIST_DIR, session_id)
         if not os.path.isdir(path):
@@ -214,7 +217,6 @@ class RAGEngine:
     # ============================================================
     # QUERY (read-only)
     # ============================================================
-
     def query(self, question: str, session_id: str):
         docs = self._retrieve_docs(question, session_id)
 
@@ -252,7 +254,6 @@ class RAGEngine:
     # ============================================================
     # SUGGEST (propositional)
     # ============================================================
-
     def suggest(self, question: str, session_id: str):
         docs = self._retrieve_docs(question, session_id)
         context = self._build_context(docs)
@@ -270,24 +271,48 @@ class RAGEngine:
             "proposal": proposal,
             "warning": "This code is a proposal and has NOT been applied to the codebase.",
         }
+    # ============================================================
+    # GENERATE DOCS
+    # ============================================================
+    def generate_docs(self,session_id: str,doc_type: str,audience: str,business_context: str | None,k: int = 12,):
+        # Normalize empty business context
+        if business_context is not None and not business_context.strip():
+            business_context = None
+        
+        prompt_business_context = (business_context if business_context is not None else "No business context provided by the user.")
 
-    def generate_docs(self,session_id: str,doc_type: str,audience: str, business_context: str | None = None,k: int = 12,):
+        cache_key = self._docs_cache_key(
+            session_id=session_id,
+            doc_type=doc_type,
+            audience=audience,
+            business_context=prompt_business_context,
+        )
+
+        cached = self.cache.get(cache_key)
+        if cached:
+            return cached
+
+        # Broaden retrieval for onboarding docs
+        query_hint = doc_type.replace("_", " ")
+        if doc_type == "onboarding":
+            query_hint = "entrypoint overview main app config routing"
         vectordb = self._get_vectordb(session_id)
 
-        # Broad retrieval for docs
         docs = vectordb.similarity_search_with_score(
-            doc_type.replace("_", " "),
+            query_hint,
             k=k,
         )
 
         if not docs:
-            return {
+            result = {
                 "doc_type": doc_type,
                 "audience": audience,
                 "content": "Not enough information in the codebase to generate documentation.",
                 "sources": [],
                 "warning": "Documentation generation failed due to insufficient context.",
             }
+            self.cache.set(cache_key, result)
+            return result
 
         normalized = [
             {"text": d.page_content, "meta": d.metadata, "score": float(s)}
@@ -299,6 +324,7 @@ class RAGEngine:
             for d in normalized
         )
 
+        # DEFINE content BEFORE using it
         content = self.llm.predict(
             DOCS_PROMPT.format(
                 doc_type=doc_type,
@@ -314,13 +340,40 @@ class RAGEngine:
             if d["meta"].get("file_path")
         })
 
-        return {
+        result = {
             "doc_type": doc_type,
             "audience": audience,
             "content": content,
             "sources": sources,
             "warning": "Generated documentation is inferred from code and may be incomplete.",
-         }
+        }
+
+        self.cache.set(cache_key, result)
+        return result
+
+
+    # ============================================================
+    # HASH BUSINESS CONTEXT 
+    # ============================================================
+    def _hash_business_context(self, business_context: str | None) -> str:
+        if not business_context:
+            return "none"
+        return hashlib.sha256(business_context.strip().encode("utf-8")).hexdigest()
+
+    # ============================================================
+    # CACHE KEY
+    # ============================================================
+    def _docs_cache_key(self,session_id: str,doc_type: str,audience: str,business_context: str | None,) -> str:
+        return json.dumps(
+            {
+            "session_id": session_id,
+            "doc_type": doc_type,
+            "audience": audience,
+            "business_ctx": self._hash_business_context(business_context),
+            },
+            sort_keys=True,
+        )
+
 
 # ============================================================
 # Public API wrappers (NO shadowing)
