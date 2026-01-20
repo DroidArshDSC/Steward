@@ -23,3 +23,14 @@ class DocsGenerateResponse(BaseModel):
     content: str
     sources: List[str]
     warning: str
+
+class RepoIngestRequest(BaseModel):
+    source_type: str
+    repo_name: str
+    branch: Optional[str] = "main"
+    source: str
+    options: Optional[Dict] = {}
+
+class RepoIngestResponse(BaseModel):
+    job_id: str
+    status: str
