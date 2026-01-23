@@ -1,4 +1,5 @@
 # app/api/ingest.py
+#print("INGEST FILE LOADED FROM:", __file__)
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from app.ingestion.repo_ingestor import ingest_repository
@@ -11,7 +12,7 @@ async def ingest_repo(
     req: RepoIngestRequest,
     background_tasks: BackgroundTasks
 ):
-    if req.source_type not in {"zip", "github"}:
+    if req.source_type not in {"zip", "github", "file"}:
         raise HTTPException(status_code=400, detail="Invalid source_type")
 
     job_id = f"ingest-{req.repo_name}"

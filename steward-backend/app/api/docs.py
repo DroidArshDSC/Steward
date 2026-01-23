@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.schemas import DocsGenerateRequest, DocsGenerateResponse
+from app.schemas import DocsGenerateRequest, DocsGenerateResponse
 from app.core.rag_engine import run_generate_docs
 
 router = APIRouter()

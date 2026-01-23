@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.core.rag_engine import run_suggest
-from app.api.schemas import SuggestRequest
+from app.schemas import SuggestRequest
 
 router = APIRouter()
 

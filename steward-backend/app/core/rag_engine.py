@@ -1,5 +1,3 @@
-#print("RAG ENGINE FILE LOADED FROM:", __file__)
-
 import os
 import time
 import json
@@ -8,6 +6,7 @@ import hashlib
 from threading import Lock
 from typing import Any, Dict, Tuple
 from datetime import datetime
+
 
 from dotenv import load_dotenv
 from langchain.chat_models import ChatOpenAI
@@ -40,24 +39,70 @@ LOG_LEVEL = os.getenv("RAG_LOG_LEVEL", "INFO")
 logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger("steward.rag_engine")
 
+print("CHROMA_PERSIST_DIR:", os.path.abspath(CHROMA_PERSIST_DIR))
+
 # ============================================================
 # Prompt Templates
 # ============================================================
 
-QUERY_PROMPT = """
-You are an AI assistant answering questions about a codebase.
+CODE_QUERY_PROMPT = """
+You are an AI assistant analyzing a codebase.
 
-STRICT RULES:
-- Use ONLY the provided context.
-- If the answer is not explicitly present, respond with:
-  "This information is not present in the uploaded codebase."
-- Do NOT infer or use general knowledge.
+RULES:
+- Use ONLY the provided code context.
+- You MAY analyze and summarize information that is directly visible in the code.
+- You MAY list imports, classes, functions, and structural facts.
+- Do NOT assume runtime behavior not visible in the code.
+- Do NOT use external or general knowledge.
+- If the answer truly cannot be determined from the code, say so explicitly.
 
 Context:
 {context}
 
 Question:
-{question}""".strip()
+{question}
+""".strip()
+
+QUERY_PROMPT = """
+You are an AI assistant analyzing a codebase.
+
+RULES:
+- Use ONLY the provided code context.
+- You MAY analyze and summarize information that is directly visible in the code.
+- You MAY list imports, classes, functions, and structural facts.
+- Do NOT assume runtime behavior not visible in the code.
+- Do NOT use external or general knowledge.
+- If the answer truly cannot be determined from the code, say so explicitly.
+
+Context:
+{context}
+
+Question:
+{question}
+""".strip()
+
+CITED_QUERY_PROMPT = """
+You are answering questions about a codebase.
+
+MANDATORY RULES:
+- Respond using bullet points ONLY.
+- EACH bullet point MUST end with a citation in the format:
+  [source: CHUNK_ID]
+
+- Use ONLY information visible in the code context.
+- Do NOT explain motivations or reasons unless explicitly visible in code.
+- If you cannot produce at least ONE correctly cited bullet, respond EXACTLY:
+  "This information is not present in the uploaded codebase."
+
+EXAMPLE (FORMAT ONLY):
+- The application uses Streamlit as its framework. [source: a1b2c3d4e]
+
+Context:
+{context}
+
+Question:
+{question}
+""".strip()
 
 SUGGEST_PROMPT = """
 You are an AI onboarding assistant helping a developer extend a codebase.
@@ -195,30 +240,40 @@ class RAGEngine:
             raise RuntimeError(f"No ingestion found for session_id={session_id}")
         return Chroma(persist_directory=path, embedding_function=self.embeddings)
 
-    def _retrieve_docs(self, question: str, session_id: str, k: int = RETRIEVE_K):
+    def _retrieve_docs(self,question: str,session_id: str,k: int = RETRIEVE_K,filters: dict | None = None,):
+        #print("RETRIEVAL")
         vectordb = self._get_vectordb(session_id)
-        docs = vectordb.similarity_search_with_score(question, k=k)
+        docs = vectordb.similarity_search_with_score(
+            question,
+            k=k,
+            filter=filters or None,
+        )
 
         return [
             {
-                "text": d.page_content,
-                "meta": d.metadata,
-                "score": float(score),
+            "chunk_id": d.metadata.get("chunk_id"),
+            "text": d.page_content,
+            "meta": d.metadata,
+            "score": float(score),
             }
             for d, score in docs
         ]
-
+        
     def _build_context(self, docs):
         return "\n\n".join(
-            f"[{d['meta'].get('file_path', 'unknown')}]\n{d['text']}"
+            f"[CHUNK {d['chunk_id']} | {d['meta'].get('file_path')}]\n{d['text']}"
             for d in docs
         )
 
     # ============================================================
     # QUERY (read-only)
     # ============================================================
-    def query(self, question: str, session_id: str):
-        docs = self._retrieve_docs(question, session_id)
+    def query(self, question: str, session_id: str, filters: dict | None = None):
+        docs = self._retrieve_docs(
+            question=question,
+            session_id=session_id,
+            filters=filters,
+        )
 
         if not docs:
             return {
@@ -226,29 +281,49 @@ class RAGEngine:
                 "sources": [],
             }
 
-        avg_score = sum(d["score"] for d in docs) / len(docs)
-        if avg_score < 0.05:
-            return {
-                "answer": "This information is not present in the uploaded codebase.",
-                "sources": [],
-            }
-
         context = self._build_context(docs)
 
-        answer = self.llm.predict(
-            QUERY_PROMPT.format(
+        raw = self.llm.predict(
+            CITED_QUERY_PROMPT.format(
                 context=context,
                 question=question,
             )
         ).strip()
 
+        # ENFORCEMENT
+        valid_chunk_ids = {
+            d["meta"].get("chunk_id")
+            for d in docs
+            if d["meta"].get("chunk_id")
+        }
+
+        accepted_lines: list[str] = []
+
+        for line in raw.splitlines():
+            if "[source:" not in line:
+                continue
+
+            cited_part = line.split("[source:", 1)[-1].replace("]", "")
+            cited_ids = {cid.strip() for cid in cited_part.split(",")}
+
+            if cited_ids & valid_chunk_ids:
+                accepted_lines.append(line)
+
+        if not accepted_lines:
+            return {
+                "answer": "This information is not present in the uploaded codebase.",
+                "sources": [],
+            }
+
+        sources = sorted({
+            d["meta"].get("file_path")
+            for d in docs
+            if d["meta"].get("file_path")
+        })
+
         return {
-            "answer": answer,
-            "sources": list({
-                d["meta"].get("file_path")
-                for d in docs
-                if d["meta"].get("file_path")
-            }),
+            "answer": "\n".join(accepted_lines),
+            "sources": sources,
         }
 
     # ============================================================
@@ -382,8 +457,12 @@ class RAGEngine:
 _engine = RAGEngine()
 
 
-def run_query(question: str, session_id: str):
-    return _engine.query(question=question, session_id=session_id)
+def run_query(question: str, session_id: str, filters: dict | None = None):
+    return _engine.query(
+        question=question,
+        session_id=session_id,
+        filters=filters,
+    )
 
 def run_suggest(question: str, session_id: str):
     return _engine.suggest(question=question, session_id=session_id)

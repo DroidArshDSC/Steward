@@ -1,15 +1,15 @@
 from fastapi import APIRouter, HTTPException
 from app.core.rag_engine import run_query
-from app.api.schemas import QueryRequest
+from app.schemas import QueryRequest
 
 router = APIRouter()
 
 
 @router.post("/")
 async def query(payload: QueryRequest):
-    question = payload.get("question", "").strip()
-    session_id = payload.get("session_id")
-    mode = payload.get("mode", "query")
+    question = payload.question.strip()
+    session_id = payload.session_id.strip()
+    filters = payload.filters
 
     if not question:
         raise HTTPException(status_code=400, detail="Missing question")
@@ -19,4 +19,5 @@ async def query(payload: QueryRequest):
     return run_query(
         question=question,
         session_id=session_id,
+        filters=filters,
     )
